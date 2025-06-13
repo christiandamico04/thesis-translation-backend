@@ -1,3 +1,5 @@
+import os
+from django.http import HttpResponse, FileResponse
 from django.shortcuts import render
 from rest_framework import viewsets
 from .models import File, Translation
@@ -32,7 +34,7 @@ class FileViewSet(viewsets.ModelViewSet):
             original_text = f.read()
 
         # 4) Chiama il tuo service (mock per ora)
-        translated_text = translate(original_text, src, dst)
+        translated_text = f"[MOCK] {original_text[:50]}…"
 
         # 5) Salva in DB la traduzione
         translation = Translation.objects.create(
@@ -52,3 +54,23 @@ class FileViewSet(viewsets.ModelViewSet):
 class TranslationViewSet(viewsets.ModelViewSet):
     queryset = Translation.objects.all()
     serializer_class = TranslationSerializer
+
+    @action(detail=True, methods=['get'])
+    def download(self, request, pk=None):
+        # 1) Recupera l’istanza di Translation
+        translation = self.get_object()
+
+        # 2) Costruisci il nome del file in uscita
+        original_name = os.path.basename(translation.file.file.name)
+        base, _ext = os.path.splitext(original_name)
+        filename = f"{base}_{translation.dst_language}.txt"
+
+        # 3) Crea la response con testo tradotto
+        response = HttpResponse(
+            translation.translated_text or "",
+            content_type='text/plain; charset=utf-8'
+        )
+        
+        # 4) Forza il download dal browser
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
