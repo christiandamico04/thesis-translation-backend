@@ -1,0 +1,5 @@
+# Ignore user media folder
+/media/
+
+# Ignore venv
+/.venv/
