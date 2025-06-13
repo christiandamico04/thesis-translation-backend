@@ -2,10 +2,14 @@ import hashlib
 import requests # type: ignore
 import time
 
+# Se _USE_MOCK = True, translate() restituisce un mock senza chiamare l’API esterna
+_USE_MOCK = True
+
 # Cache in memoria: { chiave_hash: translated_text }
 _TRANSLATION_CACHE = {}
 
 class TranslationError(Exception):
+    """Eccezione lanciata quando la traduzione fallisce."""
     pass
 
 def translate(text: str, src: str, dst: str, retry: int = 3, backoff: float = 0.5) -> str:
@@ -16,8 +20,12 @@ def translate(text: str, src: str, dst: str, retry: int = 3, backoff: float = 0.
     - retry: numero di tentativi in caso di errore
     - backoff: tempo di attesa esponenziale (in secondi)
     """
-    
-    # 1) Cache key
+
+    # 1) Se mock, torna subito [MOCK src→dst]text
+    if _USE_MOCK:
+        return f"[MOCK {src}→{dst}] {text}"
+
+    # 2) Cache key
     key = hashlib.sha256(f"{src}:{dst}:{text}".encode("utf-8")).hexdigest()
     if key in _TRANSLATION_CACHE:
         return _TRANSLATION_CACHE[key]
@@ -30,7 +38,7 @@ def translate(text: str, src: str, dst: str, retry: int = 3, backoff: float = 0.
         "format": "text"
     }
 
-    # 2) Retry loop
+    # 3) Retry loop
     for attempt in range(1, retry+1):
         try:
             resp = requests.post(url, data=payload, timeout=10)
