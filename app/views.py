@@ -7,7 +7,7 @@ from .serializers import FileSerializer, TranslationSerializer
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
-from .services.translation_service import translate
+from .services.translation_service import translate, TranslationError
 
 # Create your views here.
 class FileViewSet(viewsets.ModelViewSet):
@@ -34,7 +34,10 @@ class FileViewSet(viewsets.ModelViewSet):
             original_text = f.read()
 
         # 4) Chiama il tuo service (mock per ora)
-        translated_text = f"[MOCK] {original_text[:50]}…"
+        try:
+            translated_text = translate(text=original_text, src=src, dst=dst)
+        except TranslationError as e:
+            return Response({"detail": f"Errore di traduzione: {e}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         # 5) Salva in DB la traduzione
         translation = Translation.objects.create(
