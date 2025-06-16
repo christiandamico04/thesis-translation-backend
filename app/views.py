@@ -14,6 +14,10 @@ class FileViewSet(viewsets.ModelViewSet):
     queryset = File.objects.all()
     serializer_class = FileSerializer
 
+    def perform_create(self, serializer):
+        """Associa l'utente autenticato al file durante la creazione."""
+        serializer.save(user=self.request.user)
+
     @action(detail=True, methods=['post'])
     def translate(self, request, pk=None):
         # 1) Prendi il File dal DB
