@@ -1,3 +1,5 @@
+# .github/workflows/ci.yml
+
 name: CI
 
 on:
@@ -17,6 +19,7 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: changeme
         ports:
+          # Questa riga mappa la porta 5432 del DB alla porta 5432 della macchina HOST
           - 5432:5432
         options: >-
           --health-cmd pg_isready
@@ -36,18 +39,24 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Wait for PostgreSQL
+      
+      - name: Wait for PostgreSQL and Debug Network
         run: |
-          echo "Waiting for PostgreSQL to be fully available..."
+          echo "Waiting 10 seconds for network to stabilize..."
           sleep 10
-        
+          echo "--- Network Status (netstat) ---"
+          netstat -tuln
+          echo "--- Hosts File (etc/hosts) ---"
+          cat /etc/hosts
+          
       - name: Run migrations
         env:
-          DATABASE_URL: postgres://postgres:changeme@postgres:5432/translation
+          # STRATEGIA FINALE: Usiamo l'IP esplicito 127.0.0.1 (localhost dell'host)
+          DATABASE_URL: postgres://postgres:changeme@127.0.0.1:5432/translation
         run: python manage.py migrate
         
       - name: Run tests
         env:
-          DATABASE_URL: postgres://postgres:changeme@postgres:5432/translation
+          # La stessa URL esplicita anche per i test
+          DATABASE_URL: postgres://postgres:changeme@127.0.0.1:5432/translation
         run: pytest --maxfail=1 --disable-warnings -q
