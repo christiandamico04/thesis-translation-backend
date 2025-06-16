@@ -38,4 +38,4 @@ requests>=2.28.0                # Libreria per effettuare chiamate HTTP. È util
 
 # --- Test ---
 pytest>=7.0.0                   # Framework per l'esecuzione dei test. Viene utilizzato nel workflow di GitHub Actions
-                                # (`.github/workflows/ci.yml`) per automatizzare i test del codice a ogni push.
+pytest-django>=4.0.0            # (`.github/workflows/ci.yml`) per automatizzare i test del codice a ogni push.
