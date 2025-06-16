@@ -1,5 +1,41 @@
-asgiref==3.8.1
-Django==5.2.3
-djangorestframework==3.16.0
-sqlparse==0.5.3
-requests>=2.28.0
+# ==============================================================================
+# Requisiti del Progetto - thesis-translation-backend
+# ==============================================================================
+# Questo file elenca tutte le dipendenze Python necessarie per eseguire
+# l'applicazione, i test e il deploy.
+# Usa `pip3 install -r requirements.txt` per installarle.
+# ------------------------------------------------------------------------------
+
+# --- Core Framework ---
+Django==5.2.3                   # Il framework web principale su cui è costruito l'intero backend.
+                                # Gestisce i modelli (Models), le viste (Views), gli URL e la logica di base.
+
+djangorestframework==3.16.0     # Libreria fondamentale per costruire le API REST. Fornisce i ViewSet,
+                                # i Serializer e i Router usati per esporre i dati dei File e delle Traduzioni.
+
+# --- Gestione Asincrona e Server di Produzione ---
+asgiref==3.8.1                  # Dipendenza core di Django. Fornisce l'implementazione dello standard ASGI
+                                # (Asynchronous Server Gateway Interface), essenziale per il supporto asincrono di Django.
+
+gunicorn>=20.1.0                # Server HTTP WSGI (Web Server Gateway Interface) per ambienti di produzione.
+                                # È usato nel Dockerfile per eseguire l'applicazione in modo robusto e performante,
+                                # a differenza del server di sviluppo di Django (`manage.py runserver`).
+
+# --- Connettività e Database ---
+psycopg2-binary>=2.9.0          # Adattatore (driver) per il database PostgreSQL. È indispensabile per permettere
+                                # a Django di comunicare con il database PostgreSQL definito in docker-compose.yml e nella CI.
+
+dj-database-url                 # Utility che permette di configurare la connessione al database tramite una
+                                # singola variabile d'ambiente (DATABASE_URL), come definito nel file .env.
+                                # Semplifica la gestione della configurazione tra sviluppo (SQLite) e produzione (PostgreSQL).
+
+sqlparse==0.5.3                 # Dipendenza di Django. È una libreria per l'analisi (parsing) di statement SQL,
+                                # usata internamente da Django per funzionalità di debug e logging delle query.
+
+# --- Chiamate a Servizi Esterni ---
+requests>=2.28.0                # Libreria per effettuare chiamate HTTP. È utilizzata nel `translation_service.py`
+                                # per inviare richieste all'API esterna di traduzione (es. LibreTranslate).
+
+# --- Test ---
+pytest>=7.0.0                   # Framework per l'esecuzione dei test. Viene utilizzato nel workflow di GitHub Actions
+                                # (`.github/workflows/ci.yml`) per automatizzare i test del codice a ogni push.
