@@ -54,6 +54,5 @@ jobs:
       - name: Run tests
         env:
           DJANGO_SETTINGS_MODULE: core.settings
-
           DATABASE_URL: postgres://postgres:changeme@127.0.0.1:5432/translation
-        run: pytest --maxfail=1 --disable-warnings -q
+        run: python manage.py test
