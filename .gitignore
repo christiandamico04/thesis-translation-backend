@@ -1,5 +1,16 @@
-# Ignore user media folder
+# Ignora user media folder
 /media/
 
-# Ignore venv
-/.venv/
+# Ignora python cache
+__pycache__/
+*.pyc
+
+# Ignora local database
+db.sqlite3
+
+# Ignora environment file
+.env
+
+# Ignora file di sistema macOS/Windows
+.DS_Store
+Thumbs.db

@@ -1,16 +1,22 @@
+# Questo file definisce la struttura del database tramite l'ORM (Object-Relational Mapper) di Django. Ogni classe corrisponde 
+# a una tabella nel database e i suoi attributi alle colonne della tabella.
+
 from django.db import models
 from django.contrib.auth.models import User
 from django.core.files.storage import default_storage
 
-# Create your models here.
-
+# File: rappresenta un file caricato da un utente.
 class File(models.Model):
-    # PK id generata automaticamente
+
+    # Crea una relazione con il modello Utente standard di Django. on_delete=models.CASCADE è una regola cruciale: se un utente 
+    # viene cancellato, tutti i file a lui associati vengono automaticamente cancellati a cascata.
+    # Costituisce la FK user_id.
+
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
         related_name='files'
-    )  # FK user_id
+    ) 
     name = models.CharField(max_length=255)
     file = models.FileField(upload_to='uploads/')
     size = models.PositiveIntegerField()
@@ -18,29 +24,32 @@ class File(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # Questo metodo è stato sovrascritto per aggiungere una funzionalità importante. Quando un record File viene eliminato dal database, 
+    # questo codice si assicura che anche il file fisico corrispondente venga cancellato dal disco (/media/uploads/). Questo previene 
+    # l'accumulo di file "orfani" sul server.
+
     def delete(self, *args, **kwargs):
-        # Controlla se c'è un file associato prima di fare qualsiasi cosa
-        if self.file:
-            # Memorizza il nome del file prima di cancellare l'oggetto
-            file_name = self.file.name
+        if self.file:                                               # Si controlla se c'è un file associato prima di fare qualsiasi cosa
+            file_name = self.file.name                              # Si memorizza il nome del file prima di cancellare l'oggetto
+            super().delete(*args, **kwargs)                         # Il record dal database viene cancellato
             
-            # Cancella il record dal DB
-            super().delete(*args, **kwargs)
-            
-            # Ora, usa l'API di storage per cancellare il file fisico
-            if default_storage.exists(file_name):
+            if default_storage.exists(file_name):                   # Si usa l'API di storage per cancellare il file fisico
                 default_storage.delete(file_name)
         else:
-            # Se non c'era nessun file, cancella solo il record
-            super().delete(*args, **kwargs)
+            super().delete(*args, **kwargs)                         # Qualora non ci sia alcun file, viene cancellato solo il record
 
+# Translation: rappresenta il risultato di una traduzione
 class Translation(models.Model):
-    # PK id generata automaticamente
+
+    # Collega ogni traduzione al suo file sorgente. Anche qui, on_delete=models.CASCADE assicura che cancellando un file vengano eliminate 
+    # anche tutte le sue traduzioni associate.
+    # Costituisce la FK file_id.
+
     file = models.ForeignKey(
         File,
         on_delete=models.CASCADE,
         related_name='translations'
-    )  # FK file_id
+    ) 
     src_language = models.CharField(max_length=8)
     dst_language = models.CharField(max_length=8)
     original_text = models.TextField()
@@ -48,3 +57,5 @@ class Translation(models.Model):
     status = models.CharField(max_length=20, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+# N.B. Le PK di File e di Translation sono generate automaticamente.

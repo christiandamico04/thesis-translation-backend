@@ -16,6 +16,9 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# MEDIA_URL e MEDIA_ROOT definiscono rispettivamente l'URL pubblico e il percorso fisico sul server dove verranno salvati i file caricati 
+# dagli utenti (directory /media/).
+
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media/'
 
@@ -40,8 +43,8 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    'rest_framework',               # aggiunto
-    'app',                          # aggiunto 
+    'rest_framework',               # App di terze parti
+    'app',                          # App di terze parti
 ]
 
 MIDDLEWARE = [
@@ -75,6 +78,9 @@ WSGI_APPLICATION = 'core.wsgi.application'
 
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+
+# Configura la connessione al database. Si usa la libreria dj-database-url, tramite una singola variabile d'ambiente (DATABASE_URL). 
+# Se tale variabile non è presente, ripiega su un database locale db.sqlite3 come default.
 
 DATABASES = {
     'default': dj_database_url.config(

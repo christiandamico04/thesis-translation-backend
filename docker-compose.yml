@@ -1,18 +1,46 @@
+# Il file docker-compose.yml descrive come più container interagiscono per formare l'applicazione completa. 
+# È uno strumento di orchestrazione per definire e avviare applicazioni multi-container.
+version: '3.8'
+
 services:
-  web:
-    build: .
-    command: python manage.py runserver 0.0.0.0:8000
+  # Servizio del database PostgreSQL
+  db:
+    image: postgres:15-alpine # Usiamo un'immagine "alpine" più leggera per il database
     volumes:
+      # Questo volume nominato garantisce che i dati del database vengano salvati sul disco dell'host
+      # e non vengano persi quando il container viene fermato o ricreato.
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      # Le credenziali vengono caricate dinamicamente dal file .env per maggiore sicurezza e flessibilità.
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+
+  # Servizio dell'applicazione web Django
+  web:
+    build: . # Costruisce l'immagine usando il Dockerfile che si trova nella stessa cartella.
+    volumes:
+      # Collega la cartella corrente del progetto (sull'host) alla cartella /code (nel container).
+      # Questo permette di vedere le modifiche al codice in tempo reale senza dover ricreare l'immagine.
       - .:/code
     ports:
-      - "8000:8000"
+      - "8000:8000" # Mappa la porta 8000 del container alla porta 8000 del tuo PC.
     env_file:
-      - .env
-  db:
-    image: postgres:15
-    environment:
-      POSTGRES_DB: translation
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: changeme
-    ports:
-      - "5432:5432"
+      - .env # Carica le variabili d'ambiente dal file .env.
+    depends_on:
+      - db # Specifica che il servizio 'web' deve essere avviato solo DOPO che il servizio 'db' è pronto.
+
+    deploy:
+      # Sezione per vLLM: Abilita l'accesso alla GPU NVIDIA.
+      # Dice a Docker di riservare una GPU per questo container.
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+# Definizione dei volumi nominati per la persistenza dei dati.
+volumes:
+  postgres_data:
+
