@@ -1,72 +1,116 @@
-# Questo file definisce un workflow di Continuous Integration (CI) utilizzando GitHub Actions. 
-# Lo scopo è automatizzare i test del software ogni volta che viene apportata una modifica al 
-# codice sul branch main. Questo processo garantisce che nuovo codice non introduca regressioni 
-# o errori.
+# ========================================================================================
+#                    WORKFLOW DI INTEGRAZIONE CONTINUA (CI)
+# ========================================================================================
+# Questo file definisce un workflow di Continuous Integration (CI) utilizzando GitHub Actions.
+# Lo scopo è l'automazione dei processi di validazione del software ad ogni modifica
+# apportata al codice sorgente. Tale automazione garantisce che ogni nuovo contributo
+# rispetti gli standard di qualità e non introduca regressioni funzionali. 
 
+# La direttiva 'name' assegna un identificatore leggibile al workflow,
+# che verrà visualizzato nell'interfaccia utente di GitHub Actions.
 name: CI
 
-# Il workflow si attiva automaticamente ad ogni push o pull request sul branch main.
-
+# La sezione 'on' definisce i trigger, ovvero gli eventi che avviano l'esecuzione
+# di questo workflow.
 on:
+  # Il workflow si attiva in risposta a un evento 'push' (un nuovo commit inviato).
   push:
+    # L'attivazione è ristretta esclusivamente al branch 'develop'.
     branches: [ develop ]
+  # Il workflow si attiva anche alla creazione o all'aggiornamento di una 'pull request'.
   pull_request:
+    # Anche in questo caso, il trigger è limitato a pull request dirette verso 'develop'.
     branches: [ develop ]
 
+# La sezione 'jobs' contiene l'elenco dei lavori da eseguire. I job vengono eseguiti
+# in parallelo per impostazione predefinita.
 jobs:
+  # Definizione di un singolo job denominato 'build-test'. Questo job incapsula
+  # l'intero processo di build, configurazione e test dell'applicazione.
   build-test:
+    # Specifica l'ambiente di esecuzione. Il job verrà eseguito su una macchina
+    # virtuale (runner) ospitata da GitHub, con l'ultima versione stabile di Ubuntu.
     runs-on: ubuntu-latest
-
-    # Questa è una delle funzionalità più potenti. Prima di eseguire i test, GitHub Actions avvia un 
-    # container Docker con un database PostgreSQL "pulito" e dedicato esclusivamente a questa esecuzione. 
-    # Questo garantisce che i test vengano eseguiti sempre su un database prevedibile. 
-
+    # La sezione 'services' definisce container ausiliari che vengono eseguiti in rete
+    # con il job principale. Sono ideali per fornire dipendenze come i database.
     services:
+      # Definizione di un servizio container per il database PostgreSQL.
+      # Questo approccio garantisce un database effimero, pulito e isolato per ogni
+      # esecuzione dei test, eliminando problemi di stato residuo tra le esecuzioni.
       postgres:
+        # Specifica l'immagine Docker da utilizzare. L'uso di una versione specifica ('15')
+        # garantisce la riproducibilità dell'ambiente.
         image: postgres:15
+        # Inietta variabili d'ambiente nel container del servizio per la configurazione
+        # iniziale del database (nome, utente, password).
         env:
           POSTGRES_DB: translation
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: changeme
+        # Mappa la porta 5432 del container alla porta 5432 della macchina virtuale host,
+        # rendendo il database accessibile dal job principale.
         ports:
           - 5432:5432
+        # Configura un health check. GitHub Actions attenderà che questo comando
+        # abbia successo prima di avviare gli step del job, garantendo che il database
+        # sia pronto a ricevere connessioni. 
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-          
-    steps:                                                                        # Elenca alcune operazioni sequenziali
-      - uses: actions/checkout@v3                                                 # Scarica il codice dal repository
-      
-      - name: Set up Python                                                                         
-        uses: actions/setup-python@v4                                             # Prepara l'ambiente di Python 
+    # La sezione 'steps' definisce una sequenza di task che compongono il job.
+    # Vengono eseguiti in ordine.
+    steps:
+      # Step 1: Checkout del codice sorgente.
+      # Utilizza un'azione predefinita dal marketplace di GitHub per scaricare
+      # il codice del repository all'interno dell'ambiente del runner.cancel-timeout-minutes: 
+      - uses: actions/checkout@v3
+      # Step 2: Configurazione dell'ambiente Python.
+      - name: Set up Python
+        # Utilizza un'azione predefinita per installare e configurare una specifica
+        # versione di Python, rendendola disponibile per i comandi successivi.
+        uses: actions/setup-python@v4
         with:
+          # Specifica la versione di Python da utilizzare, garantendo coerenza
+          # con l'ambiente di sviluppo e produzione.
           python-version: "3.13"
-          
-      - name: Install dependencies                                                # Installa tutte le librerie elencate nel file requirements.txt
+      # Step 3: Installazione delle dipendenze del progetto.
+      - name: Install dependencies
+        # Esegue comandi shell per installare le librerie Python necessarie.
+        # Prima aggiorna il gestore di pacchetti 'pip', poi installa le dipendenze
+        # elencate nel file 'requirements.txt'.
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
-      - name: Wait for PostgreSQL and Debug Network
+      # Step 4: Visualizzazione delle informazioni di rete per il debug.
+      - name: Display Network Status
         run: |
-          echo "Waiting 10 seconds for network to stabilize ..."
-          sleep 10
+          echo "Database readiness is handled by service healthcheck."
+          echo "Displaying network status for debug purposes..."
           echo " - Network Status (netstat) - "
           netstat -tuln
           echo " - Hosts File (etc/hosts) - "
           cat /etc/hosts
-          
-      - name: Run migrations                                    
+      # Step 5: Esecuzione delle migrazioni del database.
+      - name: Run migrations
+        # Imposta le variabili d'ambiente necessarie per questo specifico step.
         env:
-          DATABASE_URL: postgres://postgres:changeme@127.0.0.1:5432/translation   # Applica lo schema del database definito in models.py al database appena creato
+          # Fornisce all'applicazione Django la stringa di connessione per il database
+          # di servizio. L'host è '127.0.0.1' poiché il servizio è in esecuzione
+          # sulla rete locale del runner.
+          DATABASE_URL: postgres://postgres:changeme@127.0.0.1:5432/translation
+        # Esegue il comando di migrazione di Django, che applica lo schema del database
+        # definito nei modelli al database PostgreSQL appena creato.
         run: python manage.py migrate
-        
-      - name: Run tests                                                           # Esegue il comando python3 manage.py test, lanciando tutti i test definiti in app/test_app.py
+      # Step 6: Esecuzione della suite di test automatizzati.
+      - name: Run tests
         env:
+          # Specifica il percorso delle impostazioni di Django.
           DJANGO_SETTINGS_MODULE: core.settings
-          DATABASE_URL: postgres://postgres:changeme@127.0.0.1:5432/translation   # Imposta la variabile d'ambiente per la connessione al database. Nota che l'host è 
-                                                                                  # 127.0.0.1 (localhost), poiché GitHub Actions configura la rete interna per far sì 
-                                                                                  # che il container dei test possa raggiungere il container del database su quella porta. 
+          # Fornisce nuovamente la stringa di connessione al database per il processo di test.
+          DATABASE_URL: postgres://postgres:changeme@127.0.0.1:5432/translation
+        # Lancia il test runner di Django, che scopre ed esegue tutti i test definiti
+        # nel progetto. Il successo di questo step è l'indicatore primario della
+        # validità del codice.
         run: python manage.py test

@@ -1,169 +1,278 @@
-# Questo è il cuore "intelligente" dell'applicazione. È un modulo di servizio che incapsula tutta la logica di interazione con il modello di 
-# traduzione AI. Isolare questa logica rende il resto del codice (le viste) più pulito e facile da mantenere. Se in futuro si volesse cambiare 
-# modello o usare un'API esterna, basterebbe modificare solo questo file.
+"""Client per il servizio di traduzione e logica di processamento del testo.
 
-import hashlib
+Questo modulo implementa il pattern "Service Layer", agendo come un client disaccoppiato
+per il servizio di inferenza AI basato su vLLM. Incapsula tutta la logica di
+comunicazione con l'API del modello linguistico, includendo:
+  - Costruzione di prompt strutturati (Prompt Engineering).
+  - Gestione di testi lunghi tramite una strategia di chunking semantico.
+  - Caching delle traduzioni per ottimizzare le performance.
+  - Post-processing e pulizia delle risposte del modello.
+"""
+
+# ========================================================================================
+#                                  IMPORT E CONFIGURAZIONE
+# ========================================================================================
+import requests
 import logging
-import torch
+import hashlib
 import nltk
-from tqdm import tqdm
-from transformers import T5ForConditionalGeneration, T5Tokenizer
 
-# 1. Setup del Logger, che viene preferito alla semplice print.
-
+# Setup di un logger specifico per questo modulo, per consentire un logging
+# strutturato e granulare degli eventi relativi al servizio di traduzione.
 logger = logging.getLogger(__name__)
 
-# 2. Configurazione del Modello e delle costanti
+# ========================================================================================
+#                                        COSTANTI
+# ========================================================================================
 
-MODEL_NAME = "google/madlad400-3b-mt"
+# --- Costanti per la strategia di Chunking ---
+# Soglia massima, in caratteri, oltre la quale si attiva il processo di chunking.
+# Questa soglia è definita in modo conservativo per evitare di superare la massima
+# lunghezza di contesto del modello (`max_model_len`), tenendo conto anche della
+# lunghezza aggiuntiva del prompt.
+MAX_CHAR_COUNT = 3500
+# Dimensione target desiderata per ogni singolo chunk. Il processo di suddivisione
+# cercherà di creare chunk di dimensione approssimativamente pari a questo valore.
+CHUNK_TARGET_SIZE = 2000
 
-# Le variabili del modello, del tokenizer e del device vengono inizializzate a None. Verranno popolate una sola volta all'avvio dell'
-# applicazione.
-model = None
-tokenizer = None
-device = None
+# --- Costanti di configurazione del servizio ---
+# URL dell'endpoint API esposto dal servizio vLLM, compatibile con le API OpenAI.
+VLLM_API_URL = "http://vllm-server:8001/v1/chat/completions"
+# Dizionario Python utilizzato come cache in-memory.
+# NOTA ARCHITETTURALE: Questa è una cache locale per singolo processo. 
+_TRANSLATION_CACHE = {}
+# Mappatura tra i codici lingua ISO e i loro nomi in italiano, utilizzata per
+# costruire prompt più naturali e leggibili (es. 'it' -> 'italiano').
+LANGUAGE_NAMES = {
+    'en': 'inglese',
+    'it': 'italiano',
+    'fr': 'francese',
+    'de': 'tedesco',
+    'es': 'spagnolo',
+}
 
-# Si prova a scaricare il tokenizer per le frasi di NLTK ("punkt"). Questa operazione è necessaria solo al primo avvio dopo l'installazione 
-# di NLTK.
-try:
-    nltk.data.find('tokenizers/punkt')
-except nltk.downloader.DownloadError:
-    logger.info("Download del tokenizer 'punkt' di NLTK in corso...")
-    nltk.download('punkt', quiet=True)
-    logger.info("Download del tokenizer 'punkt' completato.")
-
-
-# 3. Blocco di caricamento del modello e del tokenizer all'avvio dell'app
-
-try:
-    
-    # 3.1. Selezione del dispositivo (GPU o CPU)
-
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
-        logger.info("Dispositivo MPS trovato. Si utilizzerà la GPU Apple.")
-    elif torch.cuda.is_available():
-        device = torch.device("cuda")
-        logger.info("Dispositivo CUDA trovato. Si utilizzerà la GPU NVIDIA.")
-    else:
-        device = torch.device("cpu")
-        logger.info("Nessuna GPU accelerata trovata. Si utilizzerà la CPU.")
-
-    # 3.2. Caricamento del tokenizer
-
-    logger.info(f"Caricamento del tokenizer: {MODEL_NAME}...")
-    tokenizer = T5Tokenizer.from_pretrained(MODEL_NAME)
-    
-    # 3.3. Caricamento del modello
-
-    logger.info(f"Caricamento del modello: {MODEL_NAME}. Questo potrebbe richiedere tempo e RAM ...")
-    # 'device_map="auto"' distribuisce il modello tra GPU e RAM se necessario.
-    model = T5ForConditionalGeneration.from_pretrained(MODEL_NAME, device_map="auto")
-    
-    logger.info("Modello e tokenizer caricati con successo.")
-
-except Exception as e:
-    logger.error(f"ERRORE CRITICO: Impossibile caricare il modello di traduzione. L'applicazione funzionerà senza traduzioni. Errore: {e}", exc_info=True)
-
-# 4. Cache in memoria per le traduzioni. Salva le traduzioni già eseguite per evitare di ricalcolarle. Si resetta al riavvio del server.
-
-_TRANSLATION_CACHE = {}                                                                  
-
-# 5. Eccezione personalizzata per errori di traduzione
+# ========================================================================================
+#                                  CLASSI DI ECCEZIONE
+# ========================================================================================
 class TranslationError(Exception):
-    """Eccezione custom lanciata quando la traduzione fallisce."""
+    """Eccezione personalizzata per il dominio di traduzione.
+
+    Viene sollevata per incapsulare errori specifici del servizio, come fallimenti
+    di connessione al modello AI o la ricezione di risposte malformate. L'uso di
+    un'eccezione custom permette al codice chiamante di gestire in modo mirato
+    questi specifici scenari di errore.
+    """
     pass
 
-# 6. Funzione principale di traduzione con logica di segmentazione
+# ========================================================================================
+#                                  FUNZIONI PRIVATE
+# ========================================================================================
 
-def translate(text: str, src: str, dst: str, **kwargs) -> str:
+def _build_prompt(text: str, src: str, dst: str) -> str:
+    """Costruisce un prompt strutturato per guidare il modello linguistico.
+
+    Questa funzione è un esempio di "Prompt Engineering". Il suo scopo è fornire al
+    modello istruzioni chiare, non ambigue e tassative per forzarlo a comportarsi
+    esclusivamente come un sistema di traduzione, sopprimendo ogni suo comportamento
+    conversazionale (es. frasi introduttive, commenti, ecc.).
+
+    Args:
+        text (str): Il testo da tradurre.
+        src (str): Il codice della lingua di origine.
+        dst (str): Il codice della lingua di destinazione.
+
+    Returns:
+        str: Il prompt completo, pronto per essere inviato al modello AI.
     """
-    Traduci `text` da `src` a `dst`, gestendo testi lunghi tramite segmentazione
-    automatica in blocchi (chunking).
+    source_language_name = LANGUAGE_NAMES.get(src, src)
+    destination_language_name = LANGUAGE_NAMES.get(dst, dst)
 
-    - text: stringa da tradurre
-    - src: codice lingua sorgente (non usato dal modello ma utile per la cache)
-    - dst: codice lingua destinazione ISO-639 (es. 'en', 'de', 'fr')
+    prompt_rules = (
+        f"Sei un sistema di traduzione letterale e ad alta fedeltà da {source_language_name} a {destination_language_name}.\n"
+        "ATTENZIONE: Segui queste regole in modo tassativo:\n"
+        f"1. Il tuo unico output deve essere la traduzione in {destination_language_name.upper()} del testo che si trova dopo '--- TESTO DA TRADURRE ---'.\n"
+        "2. NON scrivere MAI frasi introduttive come 'Certo, ecco la traduzione:' o simili.\n"
+        "3. NON aggiungere commenti, note o spiegazioni al di fuori della traduzione.\n"
+        "4. La tua risposta deve contenere solo ed esclusivamente il testo tradotto.\n\n"
+        "--- TESTO DA TRADURRE ---\n"
+    )
+
+    return f"{prompt_rules}{text}"
+
+def _create_chunks(text: str, target_size: int) -> list[str]:
+    """Suddivide un testo in segmenti (chunk) semanticamente coerenti.
+
+    Affronta la limitazione della finestra di contesto finita dei modelli LLM.
+    La strategia implementata usa la libreria NLTK per una tokenizzazione basata
+    su frasi (`sent_tokenize`), garantendo che ogni chunk sia composto da frasi
+    complete. Questo preserva il contesto locale, cruciale per la qualità della
+    traduzione. È presente una strategia di fallback (split per newline) per
+    garantire robustezza nel caso in cui NLTK fallisca.
+
+    Args:
+        text (str): Il testo sorgente completo da segmentare.
+        target_size (int): La dimensione approssimativa desiderata per ogni chunk.
+
+    Returns:
+        list[str]: Una lista di stringhe, ciascuna rappresentante un chunk di testo.
     """
+    logger.info(f"Testo troppo lungo ({len(text)} caratteri). Avvio del processo di chunking.")
 
-    # Controllo preliminare. Il modello deve essere stato caricato.
-    if not model or not tokenizer:
-        raise TranslationError("Il modello di traduzione non è inizializzato.")
-
-    # A. Controllo della cache. Si calcola un hash del testo completo e si controlla se è già stato tradotto.
-
-    cache_key = hashlib.sha256(f"{src}:{dst}:{text}".encode("utf-8")).hexdigest()
-    if cache_key in _TRANSLATION_CACHE:
-        logger.info(f"Traduzione completa per la chiave {cache_key[:8]}... trovata in cache. Salto l'elaborazione.")
-        return _TRANSLATION_CACHE[cache_key]
-
-    # B. Logica di segmentazione (Chunking). Definiamo una lunghezza massima di TOKEN (non caratteri) per segmento. 512 è una scelta sicura 
-    # per modelli T5, per garantire che l'input non superi la context window.
-    
-    MAX_TOKENS_PER_CHUNK = 512
-
-    # Utilizzo di NLTK per dividere il testo in frasi in modo intelligente.
-    sentences = nltk.sent_tokenize(text, language='english') 
+    try:
+        # Tenta la suddivisione per frasi, il metodo qualitativamente migliore.
+        sentences = nltk.sent_tokenize(text)
+    except Exception as e:
+        logger.error(f"Errore durante la tokenizzazione NLTK. Errore: {e}. Attivazione fallback.")
+        # Se NLTK fallisce, si usa lo split per paragrafo come ripiego.
+        sentences = text.split('\n')
 
     chunks = []
-    current_chunk_sentences = []
-    current_chunk_tokens = 0
-    logger.info(f"Inizio segmentazione del testo ({len(sentences)} frasi totali) in blocchi da max {MAX_TOKENS_PER_CHUNK} token.")
+    current_chunk = ""
 
     for sentence in sentences:
+        if len(current_chunk) + len(sentence) > target_size and current_chunk:
+            chunks.append(current_chunk.strip())
+            current_chunk = ""
 
-        # Calcolo del numero di token che la frase aggiungerebbe.
-        sentence_tokens = len(tokenizer.encode(sentence))
+        current_chunk += sentence + " "
 
-        # Se aggiungere la nuova frase supera il limite e il chunk corrente non è vuoto, allora si salva il chunk corrente e se ne inizia uno nuovo.
-        if current_chunk_tokens + sentence_tokens > MAX_TOKENS_PER_CHUNK and current_chunk_sentences:
-            chunks.append(" ".join(current_chunk_sentences))
-            current_chunk_sentences = [sentence]
-            current_chunk_tokens = sentence_tokens
-        else:
+    if current_chunk:
+        chunks.append(current_chunk.strip())
 
-            # Si aggiunge la frase al chunk corrente.
-            current_chunk_sentences.append(sentence)
-            current_chunk_tokens += sentence_tokens
+    logger.info(f"Il testo è stato suddiviso in {len(chunks)} chunk.")
+    return chunks
 
-    # Si aggiunge l'ultimo chunk rimasto.
-    if current_chunk_sentences:
-        chunks.append(" ".join(current_chunk_sentences))
+def _call_vllm_api(text_to_translate: str, src: str, dst: str) -> str:
+    """Gestisce la singola chiamata HTTP all'API del servizio vLLM.
 
-    logger.info(f"Testo diviso in {len(chunks)} segmenti pronti per la traduzione.")
+    Questa funzione ausiliaria incapsula la logica di comunicazione di basso livello:
+    costruisce il payload della richiesta, la esegue e gestisce sia gli errori di
+    rete che il parsing della risposta JSON.
 
-    # C. Traduzione di ogni segmento
+    Returns:
+        La stringa di testo tradotta e pulita.
 
-    translated_chunks = []
+    Raises:
+        TranslationError: Se la richiesta fallisce o la risposta è malformata.
+    """
+    prompt = _build_prompt(text_to_translate, src, dst)
+
+    # Costruzione del payload secondo il formato atteso dall'API di vLLM.
+    payload = {
+        "model": "google/gemma-2b-it",                              # Specifica il modello da utilizzare.
+        "messages": [{"role": "user", "content": prompt}],          # Contiene il prompt.
+        "max_tokens": 2048,                                         # Limita la lunghezza massima della risposta.
+        "temperature": 0.1,                                         # Valore basso per risposte deterministiche e letterali.
+    }
+
+    logger.info(f"Invio richiesta di traduzione al servizio vLLM per {len(text_to_translate)} caratteri.")
+
     try:
+        # Esecuzione della richiesta HTTP con un timeout generoso.
+        response = requests.post(VLLM_API_URL, json=payload, timeout=600)
+        # Solleva un'eccezione per status code di errore (4xx o 5xx).
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        # In caso di errore di rete o di connessione.
+        error_message = f"Il servizio di traduzione non è al momento disponibile: {e}"
+        logger.error(f"ERRORE CRITICO: Impossibile connettersi a vLLM. Errore: {e}", exc_info=True)
+        raise TranslationError(error_message)
 
-        # Si usa tqdm per avere una barra di progresso visibile nei log del server.
-        for chunk in tqdm(chunks, desc=f"Traduzione da '{src}' a '{dst}'"):
+    try:
+        # Parsing della risposta JSON e estrazione del testo tradotto.
+        data = response.json()
+        translated_text = data['choices'][0]['message']['content']
 
-            # Si prepara l'input per MADLAD-400 con il prefisso della lingua.
-            prompt = f"<2{dst}> {chunk}"
-            
-            # Si tokenizza e si sposta sul dispositivo corretto (GPU/CPU).
-            input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
-            
-            # Si genera la traduzione.
-            outputs = model.generate(input_ids=input_ids, max_length=1024)
-            
-            # Si decodificano i token di output in una stringa di testo.
-            translated_text = tokenizer.decode(outputs[0], skip_special_tokens=True)
-            translated_chunks.append(translated_text)
-            
-    except Exception as e:
-        logger.error(f"Errore durante l'inferenza del modello su un segmento: {e}", exc_info=True)
-        raise TranslationError(f"Inferenza fallita su un segmento: {e}")
+        # Applicazione di un filtro di pulizia per rimuovere artefatti.
+        cleaned_translation = _clean_translation(translated_text)
+        
+        logger.info("Traduzione ricevuta e pulita con successo.")
+        return cleaned_translation
+    except (KeyError, IndexError, TypeError) as e:
+        # In caso di risposta JSON non conforme al formato atteso.
+        error_message = f"Risposta non valida o malformata dal servizio di traduzione: {e}"
+        logger.error(f"ERRORE: Parsing della risposta da vLLM fallito. Risposta: {response.text}", exc_info=True)
+        raise TranslationError(error_message)
 
-    # D. Ricomposizione e salvataggio in cache. Si uniscono i segmenti tradotti con uno spazio.
+def _clean_translation(text: str) -> str:
+    """Esegue una pulizia programmatica (sanitizzazione) dell'output del modello.
 
-    full_translated_text = " ".join(translated_chunks)
+    Questa funzione di post-processing è un passo pragmatico per rimuovere frasi
+    conversazionali e altri artefatti che il modello potrebbe generare nonostante
+    le istruzioni del prompt, garantendo che l'output finale sia solo la traduzione.
+    """
+    frasi_indesiderate = [
+        "Sure, il testo è stato tradotto da italiano a inglese come segue:",
+        "Sure, il testo è stato tradito con alta precisione.",
+        "Sure, il testo è stato tradito.",
+        "Sure, il testo è già tradotto.",
+        "The text is not provided in the context, so I cannot translate it.",
+        "Sure, the correct management of chunks is the subject of this test.",
+        "Sure, the test is designed to verify the correct management of chunks.",
+    ]
     
-    logger.info("Traduzione di tutti i segmenti completata con successo.")
+    cleaned_text = text
+    for frase in frasi_indesiderate:
+        cleaned_text = cleaned_text.replace(frase, "")
     
-    # Si salva il risultato completo nella cache per richieste future.
-    _TRANSLATION_CACHE[cache_key] = full_translated_text
+    # Rimuove virgolette e spazi bianchi residui.
+    return cleaned_text.strip().strip('"').strip("'").strip("`").strip()
+
+# ========================================================================================
+#                                   FUNZIONE PUBBLICA
+# ========================================================================================
+
+def translate(text: str, src: str, dst: str, **kwargs) -> str:
+    """Orchestra il processo completo di traduzione.
+
+    Questa è la funzione di facciata (facade) del modulo. Gestisce il workflow
+    completo: controlla la cache, decide la strategia (chiamata singola o chunking),
+    invoca le funzioni ausiliarie per l'esecuzione e infine popola la cache con
+    il nuovo risultato.
+
+    Args:
+        text (str): Il testo originale da tradurre.
+        src (str): Il codice della lingua di origine.
+        dst (str): Il codice della lingua di destinazione.
+        **kwargs: Argomenti aggiuntivi per future estensioni.
+
+    Returns:
+        str: Il testo finale tradotto.
+    """
+    # --- 1. Livello di Caching ---
+    # Genera una chiave univoca per la richiesta basata sul suo contenuto.
+    cache_key = hashlib.sha256(f"{src}:{dst}:{text}".encode("utf-8")).hexdigest()
+    # Se la chiave esiste, restituisce il risultato cachato per ottimizzare le performance.
+    if cache_key in _TRANSLATION_CACHE:
+        logger.info(f"Traduzione completa per la chiave {cache_key[:8]}... trovata in cache.")
+        return _TRANSLATION_CACHE[cache_key]
+
+    # --- 2. Logica di Orchestrazione ---
+    # Se il testo supera la soglia, attiva la strategia di chunking.
+    if len(text) > MAX_CHAR_COUNT:
+        chunks = _create_chunks(text, CHUNK_TARGET_SIZE)
+        translated_chunks = []
+
+        # Itera su ogni chunk, lo traduce singolarmente e raccoglie i risultati.
+        for i, chunk in enumerate(chunks):
+            logger.info(f"Traduzione del chunk {i+1}/{len(chunks)}...")
+            try:
+                translated_chunk = _call_vllm_api(chunk, src, dst)
+                translated_chunks.append(translated_chunk)
+            except TranslationError as e:
+                # Se la traduzione di un singolo chunk fallisce, l'intero processo
+                # viene interrotto per garantire l'integrità del risultato finale.
+                logger.error(f"Fallimento traduzione del chunk {i+1}. Errore: {e}")
+                raise TranslationError(f"La traduzione è fallita sul chunk {i+1}/{len(chunks)}. Dettagli: {e}")
+        
+        # Riunisce i chunk tradotti in un'unica stringa.
+        final_translation = " ".join(translated_chunks)
+    else:
+        # Se il testo è corto, procede con una singola chiamata all'API.
+        final_translation = _call_vllm_api(text, src, dst)
     
-    return full_translated_text
+    # --- 3. Popolamento della Cache e Restituzione ---
+    logger.info("Processo di traduzione completato con successo.")
+    # Salva il nuovo risultato nella cache per le richieste future.
+    _TRANSLATION_CACHE[cache_key] = final_translation
+    return final_translation

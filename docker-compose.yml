@@ -1,38 +1,132 @@
-# Il file docker-compose.yml descrive come più container interagiscono per formare l'applicazione completa. 
-# È uno strumento di orchestrazione per definire e avviare applicazioni multi-container.
-version: '3.8'
+# ========================================================================================
+#            ORCHESTRAZIONE DEI SERVIZI TRAMITE DOCKER COMPOSE
+# ========================================================================================
+# Questo file definisce l'intera architettura a microservizi dell'applicazione.
+# Docker Compose legge questo file per avviare, configurare e connettere in rete
+# tutti i container necessari, creando un ambiente di esecuzione completo e isolato.
+# -----------------------------------------------------------------------------------------
 
+# La direttiva 'services' è la radice della configurazione e contiene la
+# definizione di ogni singolo servizio (container) che compone l'applicazione.
 services:
-  # Servizio del database PostgreSQL
+
+  # --- Servizio 1: Database PostgreSQL ---
+  # Questo servizio esegue un'istanza dedicata del database relazionale PostgreSQL.
   db:
-    image: postgres:15-alpine # Usiamo un'immagine "alpine" più leggera per il database
+    # Specifica l'immagine Docker da utilizzare. 'postgres:15-alpine' è stata scelta
+    # per la sua leggerezza (grazie alla base Alpine Linux) e per la versione
+    # specifica ('15'), che garantisce la riproducibilità dell'ambiente.
+    image: postgres:15-alpine
+    # La direttiva 'volumes' gestisce la persistenza dei dati.
     volumes:
-      # Questo volume nominato garantisce che i dati del database vengano salvati sul disco dell'host
-      # e non vengano persi quando il container viene fermato o ricreato.
+      # Monta un "volume nominato" (`postgres_data`) nella directory interna al
+      # container dove PostgreSQL salva i suoi dati. Questo disaccoppia il ciclo
+      # di vita dei dati da quello del container, garantendo che i dati non vengano
+      # persi in caso di riavvio o ricreazione del servizio.
       - postgres_data:/var/lib/postgresql/data/
+    # Inietta variabili d'ambiente nel container, lette dal file '.env' locale.
+    # Vengono utilizzate da PostgreSQL al primo avvio per inizializzare il database.
     environment:
-      # Le credenziali vengono caricate dinamicamente dal file .env per maggiore sicurezza e flessibilità.
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    # Definisce un controllo dello stato di salute (health check). Docker monitorerà
+    # periodicamente il database per assicurarsi che sia operativo e pronto a
+    # ricevere connessioni prima di avviare i servizi che ne dipendono.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
-  # Servizio dell'applicazione web Django
-  web:
-    build: . # Costruisce l'immagine usando il Dockerfile che si trova nella stessa cartella.
+  # --- Servizio 2: Server di Inferenza AI (vLLM) ---
+  # Un servizio specializzato e disaccoppiato, dedicato esclusivamente all'esecuzione
+  # del modello linguistico con performance ottimizzate grazie a vLLM e all'uso della GPU.
+  vllm-server:
+    # Utilizza un'immagine ufficiale di vLLM.
+    image: vllm/vllm-openai:v0.9.1
+    # Carica le variabili d'ambiente dal file .env, necessario per fornire
+    # token di autenticazione (es. HUGGING_FACE_HUB_TOKEN).
+    env_file:
+      - .env
+    # Sovrascrive il comando di default dell'immagine per avviare il server vLLM
+    # con parametri di configurazione specifici per il modello e le performance.
+    command: >
+      --model "google/gemma-2b-it"
+      --port 8001
+      --host "0.0.0.0"
+      --tensor-parallel-size 1
+      --dtype float16
+      --gpu-memory-utilization 0.9
+      --max-model-len 4096
+    # Mappa la porta 8001 del container alla porta 8001 della macchina host.
+    ports:
+      - "8001:8001"
+    # Mappa la cache locale di Hugging Face per evitare di riscaricare i modelli
+    # (che possono pesare diversi Gigabyte) ad ogni riavvio del container.
     volumes:
-      # Collega la cartella corrente del progetto (sull'host) alla cartella /code (nel container).
-      # Questo permette di vedere le modifiche al codice in tempo reale senza dover ricreare l'immagine.
+      - huggingface_cache:/root/.cache/huggingface
+    # Sezione per l'allocazione di risorse hardware specifiche.
+    deploy:
+      resources:
+        reservations:
+          # Assegna in modo esclusivo una GPU NVIDIA al container, abilitando
+          # l'accelerazione hardware indispensabile per l'inferenza.
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # --- Servizio 3: Applicazione Web Django ---
+  # Il cuore dell'applicazione, che gestisce la logica di business e le API REST.
+  web:
+    # Specifica che l'immagine per questo servizio deve essere costruita localmente
+    # utilizzando il Dockerfile specificato.
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    # Monta il codice sorgente locale all'interno del container. Questa è una tecnica
+    # chiave per lo sviluppo, in quanto permette di applicare modifiche al codice
+    # in tempo reale senza dover ricostruire l'immagine (hot-reloading).
+    volumes:
       - .:/code
     ports:
-      - "8000:8000" # Mappa la porta 8000 del container alla porta 8000 del tuo PC.
+      - "8000:8000"
     env_file:
-      - .env # Carica le variabili d'ambiente dal file .env.
+      - .env
+    # Definisce le dipendenze di avvio tra i servizi.
     depends_on:
-      - db # Specifica che il servizio 'web' deve essere avviato solo DOPO che il servizio 'db' è pronto.
+      # Il servizio 'web' non verrà avviato finché il servizio 'db' non avrà
+      # superato il suo 'healthcheck', garantendo che il database sia pronto.
+      db:
+        condition: service_healthy
+      # Per il 'vllm-server', è sufficiente che il servizio sia stato avviato,
+      # poiché la prima richiesta potrebbe richiedere tempo per il caricamento del modello.
+      vllm-server:
+        condition: service_started
 
+  # --- Servizio 4: Applicazione di Benchmark FastAPI ---
+  # Un servizio ausiliario e autonomo per eseguire i test di performance e qualità.
+  benchmark-service:
+    build:
+      context: ./benchmark-service
+      dockerfile: Dockerfile
+    # Il comando avvia il server Uvicorn in modalità 'reload', che ricarica
+    # automaticamente il server ad ogni modifica del codice, facilitando lo sviluppo.
+    command: python -m uvicorn main:app --host "0.0.0.0" --port 8002 --reload
+    volumes:
+      # Monta il codice sorgente per l'hot-reloading.
+      - ./benchmark-service:/code
+      # Condivide la cache di Hugging Face per non riscaricare i modelli.
+      - huggingface_cache:/root/.cache/huggingface
+    ports:
+      - "8002:8002"
+    depends_on:
+      - vllm-server
+    # Assegna la GPU anche a questo container, necessaria per eseguire il test
+    # "senza vLLM" caricando il modello direttamente con la libreria Transformers.
     deploy:
-      # Sezione per vLLM: Abilita l'accesso alla GPU NVIDIA.
-      # Dice a Docker di riservare una GPU per questo container.
       resources:
         reservations:
           devices:
@@ -40,7 +134,9 @@ services:
               count: 1
               capabilities: [gpu]
 
-# Definizione dei volumi nominati per la persistenza dei dati.
+# --- Dichiarazione dei Volumi ---
+# Sezione dove vengono dichiarati i volumi "nominati" utilizzati dai servizi.
+# Questo permette a Docker di gestire il ciclo di vita del volume.
 volumes:
   postgres_data:
-
+  huggingface_cache: {}

@@ -1,0 +1,88 @@
+# ========================================================================================
+#          DOCKERFILE PER IL SERVIZIO 'web' (APPLICAZIONE DJANGO)
+# ========================================================================================
+# Questo Dockerfile definisce le istruzioni per costruire l'immagine containerizzata
+# per il servizio principale 'web'. L'immagine risultante conterrà l'applicazione
+# Django, tutte le sue dipendenze e la configurazione necessaria per l'esecuzione.
+#-----------------------------------------------------------------------------------------
+
+# --- FASE 1: Immagine di Base e Dipendenze di Sistema ---
+# La prima fase definisce l'ambiente di base del sistema operativo e le sue dipendenze.
+
+# Si parte da un'immagine base ufficiale di NVIDIA. Sebbene questo container non esegua
+# direttamente il modello AI, l'utilizzo di una base comune con il servizio 'vllm-server'
+# mitiga potenziali conflitti di driver o librerie di sistema a basso livello,
+# garantendo maggiore coerenza nell'intero stack applicativo.
+FROM nvidia/cuda:12.1.1-runtime-ubuntu22.04
+
+# Imposta variabili d'ambiente globali per il container.
+# PYTHONUNBUFFERED=1: Forza l'output di Python a essere inviato direttamente
+#                     allo standard output, rendendo i log visibili in tempo reale
+#                     negli orchestratori di container come Docker Compose.
+# DEBIAN_FRONTEND=noninteractive: Automatizza l'installazione dei pacchetti di sistema
+#                                 impedendo ai comandi 'apt-get' di richiedere
+#                                 input manuali durante il processo di build.
+ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Imposta la directory di lavoro predefinita all'interno del container.
+WORKDIR /code
+
+# Installa le dipendenze a livello di sistema operativo.
+# 'python3.11' e 'python3-pip' forniscono l'interprete e il gestore di pacchetti.
+# 'netcat' è un'utilità di rete leggera utilizzata dallo script 'wait-for-it.sh'.
+# Il comando finale `rm -rf` pulisce la cache di 'apt' per ridurre la dimensione
+# finale dell'immagine.
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3-pip \
+    netcat \
+    && rm -rf /var/lib/apt/lists/*
+
+# Crea un link simbolico per rendere 'python' un alias di 'python3.11',
+# semplificando l'esecuzione di comandi Python all'interno del container.
+RUN ln -s /usr/bin/python3.11 /usr/bin/python
+
+# --- FASE 2: Installazione delle Dipendenze Python ---
+# Questa fase è ottimizzata per sfruttare il sistema di caching a layer di Docker.
+
+# Copia *solo* il file delle dipendenze. Questo crea un layer che verrà invalidato
+# e rieseguito solo se 'requirements.txt' cambia, non ad ogni modifica del codice.
+COPY requirements.txt .
+
+# Aggiorna pip e installa le librerie Python. L'opzione '--no-cache-dir'
+# previene il salvataggio della cache di pip, riducendo la dimensione dell'immagine.
+RUN python -m pip install --no-cache-dir --upgrade pip
+RUN python -m pip install --no-cache-dir -r requirements.txt
+
+# --- FASE 3: Aggiunta dei Dati e del Codice dell'Applicazione ---
+
+# Copia i dati di NLTK (pre-scaricati localmente) nella directory di sistema
+# standard dove NLTK li cerca. Questo rende l'immagine auto-contenuta
+# e indipendente da download esterni al runtime, migliorando l'affidabilità.
+COPY nltk_data/ /usr/share/nltk_data/
+
+# Copia il resto del codice sorgente del progetto. Questo comando viene posizionato
+# verso la fine del Dockerfile perché il codice sorgente è la parte che cambia più
+# di frequente, invalidando così solo gli ultimi layer della cache.
+COPY . .
+
+# --- FASE 4: Preparazione per la Produzione e Comando di Avvio ---
+
+# Esegue il comando 'collectstatic' di Django. Questa operazione raccoglie tutti
+# i file statici (CSS, JS) in un'unica directory (`STATIC_ROOT`), pronta per
+# essere servita in modo efficiente da un web server o da WhiteNoise.
+# Viene fornita una chiave segreta fittizia, necessaria solo per questa operazione.
+RUN SECRET_KEY="dummy-key-for-build" python manage.py collectstatic --noinput
+
+# Copia gli script di avvio nel container e li rende eseguibili.
+COPY ./entrypoint.sh /code/entrypoint.sh
+COPY ./wait-for-it.sh /code/wait-for-it.sh
+RUN chmod +x /code/entrypoint.sh
+RUN chmod +x /code/wait-for-it.sh
+
+# Specifica lo script di entrypoint come comando di default da eseguire all'avvio.
+# L'ENTRYPOINT è responsabile delle operazioni di inizializzazione al runtime, come
+# attendere la disponibilità del database, applicare le migrazioni e infine avviare
+# il server applicativo Gunicorn.
+ENTRYPOINT ["/code/entrypoint.sh"]

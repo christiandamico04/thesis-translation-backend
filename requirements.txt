@@ -1,84 +1,44 @@
-# Core ML/DS Libraries
-accelerate
-torch==2.7.1
-torchaudio==2.7.1
-torchvision==0.22.1
-transformers
-huggingface-hub
-safetensors
-sentencepiece
-tokenizers
-numpy==2.3.0
-pandas
-pyarrow
-Pillow==11.2.1
-scikit-learn 
+# ========================================================================================
+#             DIPENDENZE PYTHON PER IL SERVIZIO 'web'
+# ========================================================================================
+# Questo file dichiara le dipendenze Python necessarie per l'ambiente di esecuzione
+# del servizio 'web'. L'uso di questo file garantisce la creazione di ambienti
+# riproducibili, come specificato nel Dockerfile.web. Le librerie di
+# Machine Learning sono intenzionalmente escluse e gestite dal servizio 'vllm-server'.
+# -----------------------------------------------------------------------------------------
 
-# NLTK e TQDM
-nltk==3.8.1
-tqdm==4.66.4
+# --- Framework Web e API ---
+# Componenti che costituiscono lo scheletro dell'applicazione web e dell'API RESTful.
+Django                  # Il framework web principale su cui è basato l'intero progetto.
+djangorestframework     # Libreria per la creazione di API RESTful robuste e scalabili su Django.
+gunicorn                # Server WSGI (Web Server Gateway Interface) di livello produzione, utilizzato
+                        # per eseguire l'applicazione Django nel container, come da entrypoint.sh.
+whitenoise[brotli]      # Ottimizza il servizio dei file statici direttamente da Django in produzione,
+                        # con il supporto per la compressione Brotli.
 
-# Django and Web Framework
-Django==5.2.3
-djangorestframework==3.16.0
-gunicorn==23.0.0
-asgiref==3.8.1
-dj-database-url==3.0.0
-psycopg2-binary==2.9.10
-sqlparse==0.5.3
+# --- Connessione al Database e Configurazione ---
+# Librerie per l'interfacciamento con il database PostgreSQL e la gestione della configurazione.
+psycopg2-binary         # L'adattatore (driver) necessario per permettere a Django di comunicare
+                        # con il database PostgreSQL definito nel docker-compose.yml.
+dj-database-url         # Utility per leggere la configurazione del database da una singola variabile
+                        # d'ambiente (`DATABASE_URL`), come implementato in settings.py.
 
-# Async and Networking
-aiohappyeyeballs
-aiohttp
-aiosignal
-async-timeout
-Brotli
-certifi
-charset-normalizer
-h2
-hpack
-hyperframe
-idna
-requests
-urllib3==2.4.0
-PySocks
-yarl
+# --- Logica Applicativa e Comunicazioni Esterne ---
+# Dipendenze utilizzate dal "service layer" per implementare la logica di business.
+requests                # Libreria per effettuare richieste HTTP, utilizzata dal translation_service.py
+                        # per comunicare con l'API del 'vllm-server'.
+nltk                    # (Natural Language Toolkit) Utilizzata per la tokenizzazione dei testi
+                        # in frasi durante il processo di chunking.
+tzdata                  # Fornisce i dati dei fusi orari, necessari a Django per la gestione
+                        # delle date e ore localizzate (`USE_TZ = True` in settings.py).
 
-# Utility and Others
-attrs
-Bottleneck
-cffi
-colorama
-dill
-filelock
-frozenlist
-fsspec==2025.3.0
-gmpy2
-iniconfig==2.1.0
-Jinja2
-MarkupSafe
-mpmath
-multidict
-multiprocess
-networkx
-numexpr
-packaging
-pluggy
-propcache
-protobuf==6.31.1
-psutil
-pycparser
-Pygments==2.19.1
-pytest==8.4.0
-pytest-django==4.11.1
-python-dateutil
-pytz
-PyYAML
-regex
-six
-sympy
-tqdm
-typing_extensions
-tzdata
-xxhash
-zstandard
+# --- Autenticazione ---
+# Componenti per la gestione dell'autenticazione basata su token.
+djangorestframework-simplejwt # Implementa l'autenticazione tramite JSON Web Tokens (JWT),
+                              # configurata come metodo di default in settings.py.
+
+# --- Testing ---
+# Framework e plugin per l'esecuzione dei test automatizzati.
+pytest                  # Framework di testing utilizzato per la validazione del codice.
+pytest-django           # Plugin che integra pytest con Django, permettendo di scrivere test
+                        # in modo più conciso e di gestire il database di test.

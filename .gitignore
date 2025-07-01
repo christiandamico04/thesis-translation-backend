@@ -1,16 +1,26 @@
-# Ignora user media folder
+# Ambiente virtuale Python
+/venv/
+
+# File di configurazione sensibili
+.env
+
+# Database locale di sviluppo
+db.sqlite3
+
+# File caricati dagli utenti
 /media/
 
-# Ignora python cache
+# Dati NLTK scaricati
+/nltk_data/
+
+# Cache di Python
 __pycache__/
 *.pyc
 
-# Ignora local database
-db.sqlite3
-
-# Ignora environment file
-.env
-
-# Ignora file di sistema macOS/Windows
+# File di sistema macOS/Windows
 .DS_Store
 Thumbs.db
+
+# File di output e artefatti di progetto
+project_dump.txt
+tradotto_*.txt

@@ -1,0 +1,3 @@
+nltk
+unbabel-comet
+requests

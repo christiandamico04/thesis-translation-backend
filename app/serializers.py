@@ -9,6 +9,7 @@
 
 from rest_framework import serializers                              # Importa gli strumenti necessari da Django REST Framework.
 from .models import File, Translation
+from django.contrib.auth.models import User
 
 # La classe ModelSerializer, fornita da DRF, semplifica enormemente la creazione di serializer per i modelli Django. Invece di definire 
 # manualmente ogni campo, ModelSerializer ispeziona il modello associato e genera automaticamente i campi corrispondenti con le validazioni 
@@ -33,3 +34,14 @@ class TranslationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Translation
         fields = '__all__'
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ('username', 'password')
+        extra_kwargs = {'password': {'write_only': True}}
+
+    def create(self, validated_data):
+        # Crea l'utente con una password correttamente hashata
+        user = User.objects.create_user(**validated_data)
+        return user

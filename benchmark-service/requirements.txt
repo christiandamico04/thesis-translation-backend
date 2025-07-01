@@ -1,0 +1,40 @@
+# ========================================================================================
+#             DIPENDENZE PYTHON PER IL SERVIZIO DI BENCHMARK
+# ========================================================================================
+# Questo file dichiara le librerie Python necessarie per l'esecuzione del
+# 'benchmark-service'. Le dipendenze sono raggruppate per funzionalità per una
+# maggiore chiarezza e manutenibilità.
+#-----------------------------------------------------------------------------------------
+
+# --- Framework API ---
+# Componenti fondamentali per la creazione e l'esecuzione del server web ASGI.
+fastapi               # Il framework web moderno e ad alte prestazioni per la creazione di API.
+uvicorn[standard]     # Il server ASGI (Asynchronous Server Gateway Interface) che esegue
+                      # l'applicazione FastAPI. L'opzione '[standard]' include ottimizzazioni
+                      # e dipendenze per una migliore performance in produzione.
+
+# --- Client HTTP ---
+# Libreria per effettuare chiamate di rete.
+requests              # Utilizzata dall'endpoint '/benchmark/with-vllm' per comunicare
+                      # con l'API del servizio 'vllm-server'.
+
+# --- Stack di Machine Learning (Approccio Standard) ---
+# Dipendenze necessarie per caricare ed eseguire il modello AI direttamente in-process
+# nell'endpoint '/benchmark/without-vllm', utilizzando lo stack standard di Hugging Face.
+torch                 # Il framework di deep learning primario (PyTorch) su cui si basa il modello.
+transformers          # La libreria di Hugging Face per scaricare, caricare e utilizzare
+                      # modelli pre-addestrati come 'google/gemma-2b-it'.
+accelerate            # Libreria di Hugging Face che semplifica l'esecuzione di PyTorch su
+                      # diverse configurazioni hardware e abilita funzionalità come il
+                      # caricamento del modello su più GPU (`device_map="auto"`).
+sentencepiece         # Una libreria di tokenizzazione richiesta da molti modelli moderni,
+                      # incluso Gemma, per convertire il testo in input numerici per il modello.
+
+# --- Monitoraggio delle Risorse di Sistema ---
+# Librerie utilizzate dalla funzione di utility `get_resource_usage` per catturare
+# le metriche di performance del sistema durante il benchmark.
+psutil                # (process and system utilities) Fornisce un'interfaccia multipiattaforma
+                      # per recuperare informazioni sull'utilizzo di CPU e memoria RAM.
+pynvml                # (Python NVIDIA Management Library) Wrapper Python per la libreria NVML
+                      # di NVIDIA, utilizzato per monitorare in tempo reale l'utilizzo
+                      # della GPU e della sua memoria dedicata.
